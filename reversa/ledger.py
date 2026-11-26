@@ -47,6 +47,9 @@ class Ledger:
     def __init__(self, path: str):
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(events)")}
+        if cols and "ts" not in cols:      # reversa.db from the earlier prototype: incompatible schema, start fresh
+            self.db.executescript("DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS kv;")
         self.db.executescript(SCHEMA)
         self.lock = threading.RLock()
 
