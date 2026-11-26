@@ -1,63 +1,71 @@
-"""Simulated suppliers. All money is integer paise. Swap this file for live GDS / hotel APIs.
+"""Simulated travel supplier. All money is integer paise. Swap this file for a live GDS / hotel API.
 
 A cancellation curve is a list of (min_hours_before_departure, fee_in_basis_points),
 read top-down: the first row whose threshold is <= hours-to-departure applies.
-This is E(t): what it costs to undo a booking, as a function of time.
+`curve=None` means the supplier did not publish a cancellation policy, so the
+cancellation fee is UNKNOWN and the safety engine will refuse to commit it.
 """
-R = 100  # paise per rupee
+from __future__ import annotations
 
-FLIGHT_CURVE = [(72, 1000), (24, 5000), (0, 10000)]       # 10% -> 50% -> locked
-HOTEL_CURVE = [(72, 1000), (24, 3000), (0, 10000)]        # 10% -> 30% -> locked
-FLEX_ACTIVITY = [(48, 0), (0, 10000)]                     # free cancel until 48h
-PAID_ACTIVITY = [(48, 1000), (0, 10000)]                  # 10% -> locked
+R = 100                    # paise per rupee
+DEPARTS_IN_HOURS = 240     # every demo trip departs 10 days from "now"
 
 VIBES = {"beach": "goa", "sea": "goa", "coast": "goa", "goa": "goa",
-         "hills": "manali", "hill": "manali", "mountains": "manali", "mountain": "manali",
-         "snow": "manali", "manali": "manali"}
+         "hills": "manali", "hill": "manali", "mountains": "manali", "manali": "manali"}
 DEST_NAMES = {"goa": "Goa", "manali": "Manali"}
 
-# unit: "pp" = per person, "night" = per room-night, "pp_once" = per person, once
+# Prices are for one traveller (return flight) or the whole stay (hotel, 3 nights).
 CATALOG = [
-    # --- Goa -------------------------------------------------------------
-    dict(id="fl_goa_malabar", cat="flight", dest="goa", name="Malabar Air return", unit="pp", price=6000 * R, score=75, curve=FLIGHT_CURVE),
-    dict(id="fl_goa_premium", cat="flight", dest="goa", name="Coastline Airways flexi return", unit="pp", price=8000 * R, score=85, curve=FLIGHT_CURVE),
-    dict(id="ho_goa_banyan", cat="hotel", dest="goa", name="Banyan Stays Candolim", unit="night", price=4000 * R, score=80, curve=HOTEL_CURVE, chain="banyan"),
-    dict(id="ho_goa_shack", cat="hotel", dest="goa", name="Sunset Beach Shack", unit="night", price=2500 * R, score=55, curve=HOTEL_CURVE),
-    dict(id="ac_goa_water", cat="activity", dest="goa", name="Water sports combo", unit="pp", price=900 * R, score=70, curve=FLEX_ACTIVITY),
-    dict(id="ac_goa_scuba", cat="activity", dest="goa", name="Scuba dive", unit="pp", price=3000 * R, score=85, curve=PAID_ACTIVITY),
-    # --- Manali ----------------------------------------------------------
-    dict(id="fl_man_himal", cat="flight", dest="manali", name="Himal Air return (Kullu)", unit="pp", price=5500 * R, score=70, curve=FLIGHT_CURVE),
-    dict(id="fl_man_premium", cat="flight", dest="manali", name="Summit Airways flexi return", unit="pp", price=7500 * R, score=85, curve=FLIGHT_CURVE),
-    dict(id="ho_man_banyan", cat="hotel", dest="manali", name="Banyan Stays Old Manali", unit="night", price=4000 * R, score=80, curve=HOTEL_CURVE, chain="banyan"),
-    dict(id="ho_man_pine", cat="hotel", dest="manali", name="Pine Lodge", unit="night", price=3000 * R, score=65, curve=HOTEL_CURVE),
-    dict(id="ac_man_para", cat="activity", dest="manali", name="Solang paragliding", unit="pp", price=1000 * R, score=80, curve=PAID_ACTIVITY),
-    dict(id="ac_man_walk", cat="activity", dest="manali", name="Old Manali heritage walk", unit="pp", price=300 * R, score=50, curve=FLEX_ACTIVITY),
+    # ---- Goa flights -----------------------------------------------------------------
+    dict(id="fl_goa_flexi", cat="flight", dest="goa", supplier="Coastline Airways", name="Coastline Airways Flexi (return)",
+         price=14000 * R, curve=[(72, 1000), (24, 2500), (0, 10000)]),          # 10% -> 25% -> 100%
+    dict(id="fl_goa_std", cat="flight", dest="goa", supplier="Konkan Jet", name="Konkan Jet Standard (return)",
+         price=12500 * R, curve=[(168, 2500), (72, 5000), (0, 10000)]),          # 25% -> 50% -> 100%
+    dict(id="fl_goa_saver", cat="flight", dest="goa", supplier="Malabar Air", name="Malabar Air Saver (return)",
+         price=10900 * R, curve=[(0, 8500)]),                                    # 85% always (taxes back only)
+    dict(id="fl_goa_charter", cat="flight", dest="goa", supplier="Sky Charter Co.", name="Sky Charter (return)",
+         price=11800 * R, curve=None),                                           # policy not published
+    # ---- Goa hotels (3 nights) ---------------------------------------------------------
+    dict(id="ho_goa_banyan", cat="hotel", dest="goa", supplier="Banyan Stays", name="Banyan Stays Candolim, 3 nights",
+         price=5400 * R, curve=[(48, 0), (0, 10000)]),                           # free until 48h
+    dict(id="ho_goa_shack", cat="hotel", dest="goa", supplier="Sunset Shacks", name="Sunset Beach Shack, 3 nights",
+         price=3900 * R, curve=[(72, 3000), (0, 10000)]),
+    dict(id="ho_goa_palm", cat="hotel", dest="goa", supplier="Palm Grove Resorts", name="Palm Grove Resort, 3 nights",
+         price=8700 * R, curve=[(72, 1000), (0, 10000)]),
+    # ---- Manali (so the parser has a second destination) ----------------------------------
+    dict(id="fl_man_std", cat="flight", dest="manali", supplier="Himal Air", name="Himal Air to Kullu (return)",
+         price=11500 * R, curve=[(72, 1000), (0, 10000)]),
+    dict(id="ho_man_pine", cat="hotel", dest="manali", supplier="Pine Lodge", name="Pine Lodge, 3 nights",
+         price=6000 * R, curve=[(48, 0), (0, 10000)]),
 ]
-
-# Same-chain bookings can be moved to a sister property instead of cancelled.
-CHAIN_CHANGE_FEE = {"banyan": 0}
-
-CATS = ("flight", "hotel", "activity")
+BY_ID = {c["id"]: c for c in CATALOG}
 
 
-def priced(dest: str, nights: int, people: int) -> list[dict]:
-    """Catalog entries for a destination, priced for this trip."""
-    out = []
-    for it in CATALOG:
-        if it["dest"] != dest:
-            continue
-        mult = nights if it["unit"] == "night" else people
-        out.append({**it, "price": it["price"] * mult})
-    return out
+def options(dest: str) -> list[dict]:
+    return [dict(c) for c in CATALOG if c["dest"] == dest]
 
 
-def fee_bps(curve: list, hours_to_departure: float) -> int:
+def fee_bps(curve: list | None, hours_to_departure: float) -> int | None:
+    if curve is None:
+        return None
     for min_hours, bps in curve:
         if hours_to_departure >= min_hours:
             return bps
     return 10000
 
 
-def cancel_fee(item: dict, hours_to_departure: float) -> int:
-    """Integer paise lost if this committed item is cancelled now. Holds cost nothing."""
-    return item["price"] * fee_bps(item["curve"], hours_to_departure) // 10000
+def cancel_fee(item: dict, hours_to_departure: float = DEPARTS_IN_HOURS) -> int | None:
+    """Integer paise lost if this booking is cancelled `hours_to_departure` before departure.
+    None when the supplier has not published a policy (the fee is unknown)."""
+    bps = fee_bps(item.get("curve"), hours_to_departure)
+    return None if bps is None else item["price"] * bps // 10000
+
+
+def exposure(item: dict, hours_to_departure: float = DEPARTS_IN_HOURS) -> dict:
+    """Cancellation exposure for one booking: what you lose and what comes back."""
+    fee = cancel_fee(item, hours_to_departure)
+    return {"hours_to_departure": hours_to_departure,
+            "fee": fee,
+            "refundable": None if fee is None else item["price"] - fee,
+            "fee_pct": None if fee is None else fee_bps(item["curve"], hours_to_departure) / 100,
+            "known": fee is not None}

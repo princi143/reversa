@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-ink-950: #07090e;
+  --color-ink-900: #0c1018;
+  --color-ink-850: #10151f;
+  --color-ink-800: #151b27;
+  --color-ink-700: #1f2735;
+  --color-ink-600: #2c3546;
+  --color-ink-400: #7b8699;
+  --color-ink-300: #a3adbf;
+  --color-ink-100: #e6eaf2;
+  --color-brand: #7c8cff;
+}
+
+html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+body { @apply bg-ink-950 text-ink-100 font-sans antialiased; }
+.card { @apply rounded-2xl border border-ink-700/80 bg-ink-900/80 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset]; }
+.btn, .btn-primary, .btn-ghost, .btn-danger { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40; }
+.btn-primary { @apply bg-brand text-ink-950 hover:bg-[#95a2ff]; }
+.btn-ghost { @apply border border-ink-600 bg-ink-850 text-ink-100 hover:border-ink-400; }
+.btn-danger { @apply border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20; }
+.label { @apply text-[11px] font-medium uppercase tracking-[0.08em] text-ink-400; }
+.num { @apply font-mono tabular-nums; }
+input[type=range] { accent-color: #7c8cff; }

@@ -12,7 +12,7 @@ UNITS = {w: i for i, w in enumerate(
 TENS = {w: (i + 2) * 10 for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
 MULT = {"hundred": 100, "thousand": 1000, "k": 1000, "lakh": 100000, "lac": 100000}
 CAT_WORDS = {"flight": "flight", "flights": "flight", "plane": "flight", "hotel": "hotel", "stay": "hotel",
-             "room": "hotel", "activity": "activity", "activities": "activity"}
+             "room": "hotel"}
 
 
 def normalize_numbers(text: str) -> str:
@@ -69,33 +69,38 @@ def spoken_number(text: str) -> int | None:
     return int(nums[0]) if len(nums) == 1 else None      # two different numbers = ambiguous = refuse
 
 
+BOOK_WORDS = ("book", "select", "choose", "take", "reserve", "hold")
+
+
 def parse(text: str) -> dict:
-    """Utterance -> {'intent': ..., slots}."""
+    """Utterance -> {'intent': ..., slots}. Rule-based stand-in for an LLM's intent extraction.
+    It only extracts slots; it never decides whether money may move."""
     t = normalize_numbers(text)
     words = re.findall(r"[a-z]+|\d+", t)
     dest = next((VIBES[w] for w in words if w in VIBES and not _negated(words, w)), None)
     cat = next((CAT_WORDS[w] for w in words if w in CAT_WORDS), None)
+    big = [int(n) for n in re.findall(r"\d+", t) if int(n) >= 100]
 
-    if words[:1] == ["confirm"] or " confirm " in f" {t} ":
-        return {"intent": "confirm", "number": spoken_number(t.split("confirm", 1)[1])}
-    if "reconcile" in words or "audit" in words:
-        return {"intent": "reconcile"}
+    if "confirm" in words or "approve" in words:
+        key = "confirm" if "confirm" in words else "approve"
+        n = spoken_number(t.split(key, 1)[1])
+        return {"intent": "confirm", "amount": None if n is None else n * 100}
+    if any(w in words for w in ("cancel", "drop", "remove")):
+        return {"intent": "cancel", "cat": cat}
+    if "reconcile" in words or "ledger" in words or "audit" in words or "balance" in words:
+        return {"intent": "ledger"}
+    if any(w in words for w in ("recommend", "optimise", "optimize", "best", "safest")):
+        return {"intent": "optimise"}
+    if dest and (any(w in words for w in ("plan", "trip", "under", "budget", "within")) or not
+                 any(w in words for w in BOOK_WORDS)):
+        nights = _num_before(t, r"nights?") or 3
+        return {"intent": "trip", "dest": dest, "nights": nights,
+                "budget": (max(n for n in big if n >= 1000) * 100 if any(n >= 1000 for n in big) else None)}
+    if any(w in words for w in BOOK_WORDS):
+        return {"intent": "book", "cat": cat, "amount": (big[0] * 100 if len(big) == 1 else None),
+                "ambiguous": len(big) > 1}
     if "exposure" in words or ("how" in words and "lose" in words):
         return {"intent": "exposure"}
-    if any(w in words for w in ("cancel", "drop", "remove")) and "confirm" not in words:
-        return {"intent": "cancel", "cat": cat, "everything": any(w in words for w in ("everything", "all", "trip"))}
-    nights = _num_before(t, r"nights?")
-    if nights or re.search(r"\b(budget|rupees)\b", t) and dest:
-        people = _num_before(t, r"(?:people|persons?|adults?|travell?ers?|of us)") or 2
-        big = [int(n) for n in re.findall(r"\d+", t) if int(n) >= 1000]
-        return {"intent": "trip", "dest": dest, "nights": nights, "people": people,
-                "budget": (big[0] * 100 if big else None)}
-    if dest and any(w in words for w in ("actually", "instead", "switch", "change", "rather", "not")):
-        return {"intent": "replan", "dest": dest}
-    if any(p in t for p in ("book it", "book them", "go ahead", "book the trip", "book this")):
-        return {"intent": "book"}
-    if dest:
-        return {"intent": "replan", "dest": dest}
     return {"intent": "unknown"}
 
 

@@ -1,4 +1,4 @@
-"""Reversa - book at the speed of speech, undo at the price of truth."""
-from .engine import GateError, Reversa, SupplierError
+"""Reversa - an AI booking assistant that cannot spend money without explicit user authorisation."""
+from .service import BookingService
 
-__all__ = ["Reversa", "GateError", "SupplierError"]
+__all__ = ["BookingService"]

@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Reversa host (http://localhost:8000)",
+      "name": "Reversa backend (http://localhost:8000)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
