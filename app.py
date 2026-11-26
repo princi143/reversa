@@ -13,6 +13,7 @@ saying the exact amount, and it is the only code path that mints an approval tok
 from __future__ import annotations
 
 import json
+import mimetypes
 import time
 from collections import deque
 from pathlib import Path
@@ -27,6 +28,10 @@ from reversa import BookingService
 from reversa.catalog import DEPARTS_IN_HOURS, options
 from reversa.speech import parse
 from reversa.speech import say_rupees as rs
+
+# Windows can map .js to text/plain via the registry; browsers then refuse to run the UI's module script.
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
 
 
 class McpBridge:
