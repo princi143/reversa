@@ -1,72 +1,109 @@
-# Reversa — prototype
+# Reversa
 
-**Make MCP Matter · Track 01: No Screens.** Book at the speed of speech. Undo at the price of truth.
+**wHACKiest 2026 · Track 1: Make MCP Matter: Less Magic, More Utility** · Team Goal Diggers
 
-The LLM talks; deterministic code guards the money. Every booking is held before it is committed, every
-undo has a spoken price, and every paisa sits in exactly one of five ledger states.
+Reversa is a voice-first AI travel booking assistant built on MCP. Before it spends any money it checks the
+financial consequences, requires the user's explicit approval of the exact amount, controls how the
+transaction executes, and handles failures safely.
 
-## Run it in VS Code
+> **AI agents should not be allowed to spend money without explicit user authorisation.**
 
-1. Open this folder in VS Code (`File → Open Folder…`).
-2. Open a terminal (`` Ctrl+` ``) and run:
+This is an ideathon MVP. The suppliers are simulated. The MCP communication, approval signatures, safety
+checks and SQLite ledger are real code, and the tests exercise them.
 
-   ```bash
-   python -m venv .venv
-   # Windows:      .venv\Scripts\activate
-   # macOS/Linux:  source .venv/bin/activate
-   pip install -r requirements.txt
-   pytest -q                     # 21 tests
-   uvicorn app:app --reload      # then open http://localhost:8000
-   ```
+---
 
-   Or press **F5** and pick "Reversa host" (uses `.vscode/launch.json`).
-3. Use **Chrome or Edge** for the microphone. Typing and the demo buttons work in any browser.
+## Quick start
 
-Needs Python 3.10+. State is stored in `reversa.db` in this folder; the **Reset** button clears it.
+Requirements: **Python 3.10+**, **Node 18+**, and Chrome or Edge if you want to use the microphone.
 
-## The five-turn demo (slide 4)
+```bash
+# 1. backend
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-| Turn | Say | What happens |
-|---|---|---|
-| 1 | "Goa, 3 nights, ₹40,000, two people." | Holds flight + hotel + activity (₹25,800). Exposure ₹0. |
-| 2 | "Book it." then "confirm 25800" | Read-back, token minted, ladder commits cheapest-to-undo first. Exposure ₹2,400. |
-| 3 | "Actually hills, not beach." then "confirm 1200" | CP-SAT moves the hotel to its sister property and cancels only the flight: ₹1,200 instead of ₹2,400. |
-| 4 | "Cancel the activity." then "confirm 200" | ₹1,800 goes to refund-pending and stays out of free cash. |
-| 5 | "Reconcile." | Replays the SQLite event log; postings sum to ₹0. |
+# 2. frontend (build once; FastAPI serves it)
+cd frontend
+npm install
+npm run build
+cd ..
 
-Also worth showing: **Say a wrong number** (nothing changes), **Clock +3 days** (exposure climbs the curve),
-**Make next flight commit time out** before a confirm (reverse saga), and **Bank settles refunds**.
-
-## Map from deck to code
-
-| Deck | Where |
-|---|---|
-| Hold before commit, priced commit ladder, reverse sagas | `reversa/engine.py` |
-| Time-varying reversibility curve E(t) | `reversa/catalog.py` (`cancel_fee`), `engine.forecast()` |
-| Minimal-regret CP-SAT diff, strict cash fence | `reversa/solver.py` |
-| Zero-sum ledger, five states, `reconcile()`, idempotency keys | `reversa/ledger.py` |
-| Numeric read-back and signed single-use voice token | `engine.confirm()` / `engine.execute()` |
-| Speech → intent, number words ("forty thousand") | `reversa/speech.py` |
-| FastAPI policy gate + live inspector UI | `app.py`, `static/index.html` |
-| MCP server (request-only tools) | `mcp_server.py` |
-| Every claim above as a test | `tests/test_reversa.py` |
-
-## Connecting a real model (optional)
-
-Start the host, then run `python mcp_server.py` from an MCP client (Claude Desktop config below). The server
-reaches the host over HTTP only: it has no database access, no signing secret, and no confirm tool.
-
-```json
-{"mcpServers": {"reversa": {"command": "python", "args": ["/abs/path/to/mcp_server.py"]}}}
+# 3. run
+uvicorn app:app --reload           # open http://localhost:8000
 ```
 
-## What is simulated
+**Frontend dev mode with hot reload:** keep `uvicorn app:app --reload` running, then run `cd frontend && npm run dev`
+and open http://localhost:5173. Vite proxies `/api` to port 8000.
 
-- **Suppliers**: flights, hotels and activities come from `reversa/catalog.py`. No real airline or hotel is called.
-- **The LLM**: intent parsing in the web UI is rule-based (`speech.py`), so the demo is deterministic and
-  offline. A real model plugs in through `mcp_server.py`.
-- **Voice**: the browser's built-in speech recognition and speech synthesis.
-- **Time and refunds**: the clock and bank settlement are the buttons under "Demo controls".
-- **UI**: one static HTML page, not the React + Vite + Tailwind named on slide 5.
-- **Token**: HMAC-signed and bound to the read-back, checked inside the host process. It is not tied to a
-  voiceprint; "unforgeable" here means a model cannot mint or replay one.
+**Tests:**
+
+```bash
+pytest -q                          # 27 tests
+```
+
+State lives in `reversa.db`. The signing secret is either `$REVERSA_SECRET` or a `.reversa_secret` file that is
+generated on first run. Both are git-ignored. The **Reset demo** button wipes the database and funds a ₹50,000 demo
+wallet, so you never have to edit the database by hand.
+
+---
+
+## Demo script (≈3 minutes)
+
+| # | Do | What you see |
+|---|----|---|
+| 1 | Say or type **"Plan a Goa trip under ₹20,000"** | The intent is extracted (Goa, ₹20,000, 3 nights). MCP `quote_booking` returns 4 flights and 3 hotels with their cancellation fees. |
+| 2 | **Select & hold** *Coastline Airways Flexi ₹14,000*, or say "Book the ₹14,000 flight" | MCP `hold_booking` moves ₹14,000 from *available* to *held*. The safety panel shows 3/5 checks passed and approval pending. |
+| 3 | Click **Call commit_booking without approval** | The safety engine blocks it, and a `commit_rejected` event is written to the ledger. |
+| 4 | Open **Cancellation Exposure** and drag the slider | Fee and refundable amount for each option, from 10 days out down to departure. Sky Charter shows the fee as *unknown*. |
+| 5 | Move the **CP-SAT** cancel-risk slider | At 0% it picks the cheapest pair, at 30% Konkan Jet, at 100% the flexible fare. |
+| 6 | In **Failure demonstration**, run steps 2–4 (or click **Run all**) | **Misheard ₹40,000:** *"I heard ₹40,000. Your intended booking amount was ₹14,000. I have stopped the transaction. Please confirm the correct amount."* The transaction becomes BLOCKED and the earlier approval token is revoked. **Corrected to ₹14,000:** a fresh token is signed, then `commit_booking` runs and all 5 checks pass. **Duplicate commit:** rejected. |
+| 7 | **Ledger** | Transactions table, event log with the running available balance, and 7 reconciliation checks. Cancel the booking (approve the ₹1,400 fee) and ₹12,600 moves to *refund pending*, which is **not** counted as available until you click **Bank settles refunds**. |
+| 8 | Try **"Book the ₹8,700 hotel"**, then "confirm 8700" | Budget violation: ₹14,000 + ₹8,700 > ₹20,000. The backend refuses to even mint an approval. |
+
+---
+
+## What each feature maps to
+
+| Feature | Where | Notes |
+|---|---|---|
+| 1. MCP booking: `quote_booking`, `hold_booking`, `commit_booking`, `cancel_booking` | `mcp_server.py` | FastMCP server. The web backend calls it through an MCP `ClientSession` (in-memory transport). It also runs standalone over stdio. |
+| 2. Voice booking | `frontend/src/components/VoiceBooking.jsx`, `reversa/speech.py` | Browser Web Speech API (en-IN) with a text fallback. Rule-based intent and number extraction, e.g. "fourteen thousand" → ₹14,000. |
+| 3. Financial safety engine (5 checks) | `reversa/safety.py` | A pure, deterministic function. Results are shown live in the UI. |
+| 4. Signed approval token | `reversa/approval.py`, `BookingService.approve()` | HMAC-SHA256 over {txn, amount, supplier, action, exp, nonce}. 120 s expiry, single use, revocable. |
+| 5. Cancellation exposure | `reversa/catalog.py` (`cancel_fee`, `exposure`), `Exposure.jsx` | Time-dependent fee curves in integer paise. |
+| 6. Ledger | `reversa/ledger.py` | SQLite. Append-only zero-sum event log, a `transactions` table and an `approvals` table. Balances are replayed from events. |
+| 7. Failure demo | `BookingService.approve()` mismatch path, `FailureDemo.jsx` | Misrecognition block, revocation, fresh approval and duplicate rejection. |
+| 8. Optimisation | `reversa/solver.py` | OR-Tools CP-SAT picks one flight and one hotel: minimise price + p% × fee, subject to total ≤ budget and only known policies. |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the data flow and the security model.
+
+---
+
+## Using the MCP server from Claude Desktop or MCP Inspector
+
+```json
+{"mcpServers": {"reversa": {"command": "/abs/path/to/.venv/bin/python", "args": ["/abs/path/to/reversa/mcp_server.py"]}}}
+```
+
+The stdio server shares `reversa.db` and `.reversa_secret` with the web app, so a model can quote and hold, and you
+can watch its holds appear in the UI. There is **no approve tool**. To commit, a model needs a token that only the
+web UI's `/api/approve` endpoint can mint, and only after a human types or says the exact amount.
+
+---
+
+## What is simulated, and known limitations
+
+- **Supplier:** the flights and hotels in `reversa/catalog.py` are fictional, with fixed prices and policies. No airline,
+  GDS, payment gateway or UPI is involved, and "commit" only updates our own ledger.
+- **LLM:** intent extraction is rule-based (`speech.py`) so the demo is deterministic and works offline. A real model
+  can drive the same tools over MCP. Either way, the model never authorises money: the safety engine and approval gate
+  are plain code.
+- **Speech:** the browser's built-in recogniser. The ₹40,000 misrecognition is *simulated* by sending the misheard
+  transcript; the backend's handling of it is real.
+- **Time:** every trip departs 10 days after "now". The exposure slider shows what the fees would be closer to
+  departure. Approval tokens use real wall-clock time (120 s TTL).
+- **Holds** don't expire automatically.
+- **Single user:** no accounts or auth. The MCP stdio server and the web app share one SQLite file and one secret.
+- **Token binding:** the token proves that the backend saw the user state the exact amount in this app. It is not
+  tied to a voiceprint or device.

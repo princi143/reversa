@@ -1,4 +1,14 @@
-reversa.db
-__pycache__/
-.pytest_cache/
+# Python
 .venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local state (created on first run)
+reversa.db
+*.db
+.reversa_secret
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

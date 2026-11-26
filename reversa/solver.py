@@ -1,90 +1,70 @@
-"""CP-SAT planner. One model does both jobs:
+"""CP-SAT option chooser (small, on purpose).
 
-  * first plan:  pick one flight, hotel and activity within free cash.
-  * re-plan:     given what is already committed, decide per booking whether to
-                 KEEP it, CHANGE it (same chain, small fee) or CANCEL it (fee from
-                 the curve), and what to BUY - minimising switching fees first.
+Pick exactly one flight and one hotel so that
+    total price <= trip budget                                (hard constraint)
+    only options with a published cancellation policy         (hard constraint)
+and minimise the risk-adjusted cost
+    sum( price + p * cancellation_fee )
+where p is the traveller's estimated chance of cancelling (0-100 %).
 
-The cash fence is a hard constraint: a cancellation's refund is pending, so it
-can never pay for a new booking in the same plan.
+With p = 0 this is "cheapest"; as p rises, options that are cheap but expensive
+to undo lose to slightly dearer flexible ones. Everything is integer paise.
 """
 from __future__ import annotations
 
 from ortools.sat.python import cp_model
 
-from .catalog import CATS, CHAIN_CHANGE_FEE, cancel_fee, priced
-
-SCORE_WEIGHT = 20000   # paise of value per quality point
-FEE_WEIGHT = 1000      # switching fees dominate everything else
+from .catalog import DEPARTS_IN_HOURS, cancel_fee
+from .speech import say_rupees as rs
 
 
-class NoPlan(Exception):
-    pass
+def risk_cost(item: dict, p_pct: int, hours: float = DEPARTS_IN_HOURS) -> int | None:
+    fee = cancel_fee(item, hours)
+    return None if fee is None else item["price"] + fee * p_pct // 100
 
 
-def solve(dest: str, nights: int, people: int, free_cash: int,
-          committed: list[dict] | None = None, hours_to_departure: float = 240) -> dict:
-    committed = committed or []
-    cands = priced(dest, nights, people)
+def choose(options: list[dict], budget: int, p_pct: int, hours: float = DEPARTS_IN_HOURS) -> dict:
+    p_pct = max(0, min(100, int(p_pct)))
+    table, usable = [], []
+    for o in options:
+        fee = cancel_fee(o, hours)
+        row = {"id": o["id"], "cat": o["cat"], "name": o["name"], "price": o["price"], "fee": fee,
+               "risk_cost": risk_cost(o, p_pct, hours), "eligible": fee is not None,
+               "why": "" if fee is not None else "excluded: cancellation fee unknown"}
+        table.append(row)
+        if fee is not None:
+            usable.append(o)
+
     m = cp_model.CpModel()
+    x = {o["id"]: m.NewBoolVar(o["id"]) for o in usable}
+    for cat in ("flight", "hotel"):
+        m.AddExactlyOne([x[o["id"]] for o in usable if o["cat"] == cat])
+    m.Add(sum(x[o["id"]] * o["price"] for o in usable) <= budget)
+    # scale by 100 so p% * fee stays an exact integer
+    m.Minimize(sum(x[o["id"]] * (o["price"] * 100 + cancel_fee(o, hours) * p_pct) for o in usable))
 
-    x = {c["id"]: m.NewBoolVar(f"x_{c['id']}") for c in cands}        # in the final trip
-    buy = {c["id"]: m.NewBoolVar(f"buy_{c['id']}") for c in cands}    # paid from free cash
-    keep, cancel, change = {}, {}, {}
-    for o in committed:
-        cancel[o["id"]] = m.NewBoolVar(f"cancel_{o['id']}")
-        opts = [cancel[o["id"]]]
-        if any(c["id"] == o["id"] for c in cands):                    # same item still fits
-            keep[o["id"]] = m.NewBoolVar(f"keep_{o['id']}")
-            opts.append(keep[o["id"]])
-        for c in cands:
-            if c["id"] != o["id"] and c["cat"] == o["cat"] and o.get("chain") and o.get("chain") == c.get("chain"):
-                change[(o["id"], c["id"])] = m.NewBoolVar(f"chg_{o['id']}_{c['id']}")
-                opts.append(change[(o["id"], c["id"])])
-        m.AddExactlyOne(opts)
-
-    for cat in CATS:
-        m.AddExactlyOne([x[c["id"]] for c in cands if c["cat"] == cat])
-    for c in cands:                                                   # how each chosen item is obtained
-        sources = [buy[c["id"]]] + [v for (o, n), v in change.items() if n == c["id"]]
-        if c["id"] in keep:
-            sources.append(keep[c["id"]])
-        m.Add(sum(sources) == x[c["id"]])
-
-    old = {o["id"]: o for o in committed}
-    new = {c["id"]: c for c in cands}
-    chg_fee = {k: CHAIN_CHANGE_FEE[old[k[0]]["chain"]] for k in change}
-    chg_up = {k: max(0, new[k[1]]["price"] - old[k[0]]["price"]) for k in change}
-    can_fee = {o["id"]: cancel_fee(o, hours_to_departure) for o in committed}
-
-    cash_out = (sum(buy[c["id"]] * c["price"] for c in cands)
-                + sum(v * (chg_fee[k] + chg_up[k]) for k, v in change.items()))
-    m.Add(cash_out <= free_cash)                                      # the cash fence
-
-    fees = sum(cancel[o] * can_fee[o] for o in cancel) + sum(v * chg_fee[k] for k, v in change.items())
-    value = sum(x[c["id"]] * (c["score"] * SCORE_WEIGHT - c["price"]) for c in cands)
-    m.Maximize(value - FEE_WEIGHT * fees)
-
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 5
-    solver.parameters.num_workers = 1                                 # deterministic
-    if solver.Solve(m) not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise NoPlan(f"no {dest} plan fits ₹{free_cash // 100} of free cash "
-                     "(pending refunds cannot be spent until they settle)")
-
-    val = solver.Value
-    plan = {
-        "dest": dest,
-        "keep": [old[o] for o, v in keep.items() if val(v)],
-        "cancel": [{"item": old[o], "fee": can_fee[o], "refund": old[o]["price"] - can_fee[o]}
-                   for o, v in cancel.items() if val(v)],
-        "change": [{"from": old[k[0]], "to": new[k[1]], "fee": chg_fee[k],
-                    "diff": new[k[1]]["price"] - old[k[0]]["price"]} for k, v in change.items() if val(v)],
-        "buy": [c for c in cands if val(buy[c["id"]])],
+    s = cp_model.CpSolver()
+    s.parameters.num_workers = 1          # deterministic
+    s.parameters.max_time_in_seconds = 5
+    status = s.Solve(m)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {"ok": False, "p_pct": p_pct, "table": table,
+                "explanation": f"No flight + hotel pair with a known cancellation policy fits {rs(budget)}."}
+    chosen = [o for o in usable if s.Value(x[o["id"]])]
+    for r in table:
+        r["chosen"] = r["id"] in {c["id"] for c in chosen}
+    price = sum(c["price"] for c in chosen)
+    fees = sum(cancel_fee(c, hours) for c in chosen)
+    cheapest = {}
+    for cat in ("flight", "hotel"):
+        cand = [o for o in usable if o["cat"] == cat]
+        cheapest[cat] = min(cand, key=lambda o: o["price"])["name"] if cand else None
+    return {
+        "ok": True, "p_pct": p_pct, "status": s.StatusName(status), "table": table,
+        "chosen": [{"id": c["id"], "name": c["name"], "price": c["price"], "fee": cancel_fee(c, hours)} for c in chosen],
+        "total_price": price, "total_fee": fees, "objective": price + fees * p_pct // 100,
+        "explanation": (f"CP-SAT minimised price + {p_pct}% × cancellation fee over every flight+hotel pair "
+                        f"within {rs(budget)}. Chosen: {' + '.join(c['name'] for c in chosen)} = {rs(price)}, "
+                        f"cancellation exposure {rs(fees)}, risk-adjusted cost {rs(price + fees * p_pct // 100)}. "
+                        f"Options with an unknown cancellation fee were excluded."),
     }
-    plan["fees"] = sum(c["fee"] for c in plan["cancel"]) + sum(c["fee"] for c in plan["change"])
-    plan["cash_needed"] = (sum(c["price"] for c in plan["buy"])
-                           + sum(c["fee"] + max(0, c["diff"]) for c in plan["change"]))
-    plan["naive_fees"] = sum(can_fee.values())                        # cancel everything and start over
-    plan["total"] = sum(c["price"] for c in cands if val(x[c["id"]]))
-    return plan
